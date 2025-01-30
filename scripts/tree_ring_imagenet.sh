@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 ### all cases
 python run_tree_ring_watermark_imagenet.py --run_name imgnet_no_attack --model_id 256x256_diffusion --w_radius 10 --w_channel 2 --w_pattern ring --start 0 --end 1000 --with_tracking --reference_model dummy
 python run_tree_ring_watermark_imagenet.py --run_name imgnet_rotation --model_id 256x256_diffusion --w_radius 10 --w_channel 2 --w_pattern ring --start 0 --end 1000 --r_degree 75 --with_tracking

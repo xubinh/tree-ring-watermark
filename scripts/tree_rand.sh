@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 ### all cases
 python run_tree_ring_watermark.py --run_name no_attack --w_channel 1 --w_pattern rand --start 0 --end 1000 --with_tracking --reference_model ViT-g-14 --reference_model_pretrain laion2b_s12b_b42k
 python run_tree_ring_watermark.py --run_name rotation --w_channel 1 --w_pattern rand --r_degree 75 --start 0 --end 1000 --with_tracking
