@@ -1,26 +1,24 @@
 import argparse
-import wandb
 import copy
-from tqdm import tqdm
 from statistics import mean, stdev
-from sklearn import metrics
 
 import torch
+import wandb
+from sklearn import metrics
+from tqdm import tqdm
 
 from guided_diffusion.script_util import (
     NUM_CLASSES,
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
     add_dict_to_argparser,
     args_to_dict,
+    create_model_and_diffusion,
+    model_and_diffusion_defaults
 )
-
-from optim_utils import *
 from io_utils import *
+from optim_utils import *
 
 
 def main(args):
-    table = None
     if args.with_tracking:
         wandb.init(project='diffusion_watermark', name=args.run_name, tags=['latent_watermark_fourier_openai'])
         wandb.config.update(args)

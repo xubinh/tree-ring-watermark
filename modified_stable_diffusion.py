@@ -1,12 +1,12 @@
-
-from typing import Callable, List, Optional, Union, Any, Dict
 import copy
+from typing import Any, Callable, Dict, List, Optional, Union
+
 import numpy as np
 import PIL
-
+import PIL.Image
 import torch
 from diffusers import StableDiffusionPipeline
-from diffusers.utils import logging, BaseOutput
+from diffusers.utils import BaseOutput, logging
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -18,7 +18,8 @@ class ModifiedStableDiffusionPipelineOutput(BaseOutput):
 
 
 class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
-    def __init__(self,
+    def __init__(
+        self,
         vae,
         text_encoder,
         tokenizer,
@@ -28,14 +29,16 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
         feature_extractor,
         requires_safety_checker: bool = True,
     ):
-        super(ModifiedStableDiffusionPipeline, self).__init__(vae,
-                text_encoder,
-                tokenizer,
-                unet,
-                scheduler,
-                safety_checker,
-                feature_extractor,
-                requires_safety_checker)
+        super(ModifiedStableDiffusionPipeline, self).__init__(
+            vae,
+            text_encoder,
+            tokenizer,
+            unet,
+            scheduler,
+            safety_checker,
+            feature_extractor,
+            requires_safety_checker,
+        )
 
     @torch.no_grad()
     def __call__(
@@ -54,8 +57,8 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
         callback_steps: Optional[int] = 1,
-        watermarking_gamma: float = None,
-        watermarking_delta: float = None,
+        watermarking_gamma: Optional[float] = None,
+        watermarking_delta: Optional[float] = None,
         watermarking_mask: Optional[torch.BoolTensor] = None,
     ):
         r"""
@@ -113,8 +116,8 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
             (nsfw) content, according to the `safety_checker`.
         """
         # 0. Default height and width to unet
-        height = height or self.unet.config.sample_size * self.vae_scale_factor
-        width = width or self.unet.config.sample_size * self.vae_scale_factor
+        height = height or self.unet.config.sample_size * self.vae_scale_factor  # type: ignore
+        width = width or self.unet.config.sample_size * self.vae_scale_factor  # type: ignore
 
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(prompt, height, width, callback_steps)
@@ -129,17 +132,21 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
 
         # 3. Encode input prompt
         text_embeddings = self._encode_prompt(
-            prompt, device, num_images_per_prompt, do_classifier_free_guidance, negative_prompt
+            prompt,
+            device,
+            num_images_per_prompt,
+            do_classifier_free_guidance,
+            negative_prompt,
         )
 
         # 4. Prepare timesteps
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
-        timesteps = self.scheduler.timesteps
+        self.scheduler.set_timesteps(num_inference_steps, device=device)  # type: ignore
+        timesteps = self.scheduler.timesteps  # type: ignore
 
         # 5. Prepare latent variables
-        num_channels_latents = self.unet.in_channels
+        num_channels_latents = self.unet.in_channels  # type: ignore
         latents = self.prepare_latents(
-            batch_size * num_images_per_prompt,
+            batch_size * num_images_per_prompt,  # type: ignore
             num_channels_latents,
             height,
             width,
@@ -153,46 +160,64 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
 
         # watermarking mask
         if watermarking_gamma is not None:
-            watermarking_mask = torch.rand(latents.shape, device=device) < watermarking_gamma
+            watermarking_mask = (
+                torch.rand(latents.shape, device=device) < watermarking_gamma  # type: ignore
+            )  # type: ignore
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
         # 7. Denoising loop
-        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
+        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order  # type: ignore
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # add watermark
                 if watermarking_mask is not None:
                     # latents[watermarking_mask] += watermarking_delta
-                    latents[watermarking_mask] += watermarking_delta * torch.sign(latents[watermarking_mask])
+                    latents[watermarking_mask] += watermarking_delta * torch.sign(  # type: ignore
+                        latents[watermarking_mask]  # type: ignore
+                    )
 
                 # expand the latents if we are doing classifier free guidance
-                latent_model_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                latent_model_input = (
+                    torch.cat([latents] * 2) if do_classifier_free_guidance else latents  # type: ignore
+                )
+                latent_model_input = self.scheduler.scale_model_input(  # type: ignore
+                    latent_model_input, t
+                )
 
                 # predict the noise residual
-                noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings).sample
+                noise_pred = self.unet(  # type: ignore
+                    latent_model_input, t, encoder_hidden_states=text_embeddings
+                ).sample
 
                 # perform guidance
                 if do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+                    noise_pred = noise_pred_uncond + guidance_scale * (
+                        noise_pred_text - noise_pred_uncond
+                    )
 
                 # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
+                latents = self.scheduler.step(  # type: ignore
+                    noise_pred, t, latents, **extra_step_kwargs
+                ).prev_sample
 
                 # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                if i == len(timesteps) - 1 or (
+                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0  # type: ignore
+                ):
                     progress_bar.update()
-                    if callback is not None and i % callback_steps == 0:
-                        callback(i, t, latents)
+                    if callback is not None and i % callback_steps == 0:  # type: ignore
+                        callback(i, t, latents)  # type: ignore
 
         # 8. Post-processing
         image = self.decode_latents(latents)
 
         # 9. Run safety checker
-        image, has_nsfw_concept = self.run_safety_checker(image, device, text_embeddings.dtype)
+        image, has_nsfw_concept = self.run_safety_checker(
+            image, device, text_embeddings.dtype
+        )
 
         # 10. Convert to PIL
         if output_type == "pil":
@@ -201,14 +226,18 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
         if not return_dict:
             return (image, has_nsfw_concept)
 
-        return ModifiedStableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept, init_latents=init_latents)
-
+        return ModifiedStableDiffusionPipelineOutput(
+            images=image,
+            nsfw_content_detected=has_nsfw_concept,
+            init_latents=init_latents,
+        )
 
     @torch.inference_mode()
     def decode_image(self, latents: torch.FloatTensor, **kwargs):
         scaled_latents = 1 / 0.18215 * latents
         image = [
-            self.vae.decode(scaled_latents[i : i + 1]).sample for i in range(len(latents))
+            self.vae.decode(scaled_latents[i : i + 1]).sample  # type: ignore
+            for i in range(len(latents))
         ]
         image = torch.cat(image, dim=0)
         return image
@@ -221,7 +250,7 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
 
     @torch.inference_mode()
     def get_image_latents(self, image, sample=True, rng_generator=None):
-        encoding_dist = self.vae.encode(image).latent_dist
+        encoding_dist = self.vae.encode(image).latent_dist  # type: ignore
         if sample:
             encoding = encoding_dist.sample(generator=rng_generator)
         else:

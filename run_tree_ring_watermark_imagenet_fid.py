@@ -1,27 +1,25 @@
 import argparse
-import wandb
 import copy
-from tqdm import tqdm
 from statistics import mean, stdev
-from sklearn import metrics
 
 import torch
+import wandb
+from sklearn import metrics
+from tqdm import tqdm
 
 from guided_diffusion.script_util import (
     NUM_CLASSES,
-    model_and_diffusion_defaults,
-    create_model_and_diffusion,
     add_dict_to_argparser,
     args_to_dict,
+    create_model_and_diffusion,
+    model_and_diffusion_defaults,
 )
-
-from optim_utils import *
 from io_utils import *
-from pytorch_fid.fid_score import *
+from optim_utils import *
+from pytorch_fid.fid_score import calculate_fid_given_paths
 
 
 def main(args):
-    table = None
     if args.with_tracking:
         wandb.init(
             project="diffusion_watermark",
@@ -131,6 +129,7 @@ def main(args):
 
             image_file_name = f"{counter}.jpg"
             if args.run_no_w:
+                assert orig_image_no_w
                 orig_image_no_w.save(f"{no_w_dir}/{image_file_name}")
             orig_image_w.save(f"{w_dir}/{image_file_name}")
 
