@@ -3,8 +3,6 @@ from typing import Callable, List, Optional, Tuple, Union
 
 import torch
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
-
-# from diffusers import StableDiffusionPipeline
 from diffusers.pipelines.stable_diffusion.safety_checker import (
     StableDiffusionSafetyChecker,
 )
@@ -17,7 +15,11 @@ from modified_stable_diffusion import ModifiedStableDiffusionPipeline
 
 
 def backward_ddim(x_t, alpha_t, alpha_tm1, eps_xt):
-    """from noise to image"""
+    """from noise to image
+
+    给定噪声 `eps_xt` 和当前步的图像 `x_t`, 计算前一步的图像 `x_{t - 1}`.
+
+    """
     return (
         alpha_tm1**0.5
         * (
@@ -137,7 +139,7 @@ class InversableStableDiffusionPipeline(ModifiedStableDiffusionPipeline):
 
         for i, t in enumerate(
             self.progress_bar(
-                timesteps_tensor if not reverse_process else reversed(timesteps_tensor)
+                reversed(timesteps_tensor) if reverse_process else timesteps_tensor
             )
         ):
             if prompt_to_prompt:
@@ -164,11 +166,11 @@ class InversableStableDiffusionPipeline(ModifiedStableDiffusionPipeline):
                     noise_pred_text - noise_pred_uncond
                 )
 
-            prev_timestep = (
-                t
-                - self.scheduler.config.num_train_timesteps  # type: ignore
+            previous_t = t - (
+                self.scheduler.config.num_train_timesteps  # type: ignore
                 // self.scheduler.num_inference_steps  # type: ignore
             )
+
             # call the callback, if provided
             if callback is not None and i % callback_steps == 0:  # type: ignore
                 callback(i, t, latents)  # type: ignore
@@ -176,18 +178,21 @@ class InversableStableDiffusionPipeline(ModifiedStableDiffusionPipeline):
             # ddim
             alpha_prod_t = self.scheduler.alphas_cumprod[t]  # type: ignore
             alpha_prod_t_prev = (
-                self.scheduler.alphas_cumprod[prev_timestep]  # type: ignore
-                if prev_timestep >= 0
+                self.scheduler.alphas_cumprod[previous_t]  # type: ignore
+                if previous_t >= 0
                 else self.scheduler.final_alpha_cumprod  # type: ignore
             )
+
             if reverse_process:
                 alpha_prod_t, alpha_prod_t_prev = alpha_prod_t_prev, alpha_prod_t
+
             latents = backward_ddim(
                 x_t=latents,
                 alpha_t=alpha_prod_t,
                 alpha_tm1=alpha_prod_t_prev,
                 eps_xt=noise_pred,
             )
+
         return latents
 
     @torch.inference_mode()
