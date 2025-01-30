@@ -136,3 +136,7 @@ tmp*.png
 wandb/
 fid_outputs/
 *.pt
+
+# slurm
+.slurm/
+slurm*
