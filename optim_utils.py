@@ -104,6 +104,7 @@ def measure_similarity(images, prompt, model, clip_preprocess, tokenizer, device
         text = tokenizer([prompt]).to(device)
         text_features = model.encode_text(text)
 
+        # 形状: (num_images, embedding_dim)
         image_features /= image_features.norm(dim=-1, keepdim=True)
         text_features /= text_features.norm(dim=-1, keepdim=True)
 

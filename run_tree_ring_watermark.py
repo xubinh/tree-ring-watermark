@@ -1,5 +1,6 @@
 import argparse
 import copy
+import time
 from statistics import mean, stdev
 
 import torch
@@ -15,7 +16,19 @@ from modified_stable_diffusion import ModifiedStableDiffusionPipelineOutput
 from optim_utils import *
 
 
+def my_print(
+    msg: str,
+    log_file_path: str = os.path.join(os.getcwd(), "log.txt"),
+) -> None:
+    with open(log_file_path, "a", encoding="utf8") as file:
+        file.write(msg + "\n")
+
+    print(msg, flush=True)
+
+
 def main(args):
+    my_print(f"💬 Mission {args.run_name} started...")
+
     # if args.with_tracking:
     #     wandb.init(
     #         project="diffusion_watermark",
@@ -38,9 +51,11 @@ def main(args):
     # load diffusion model
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    my_print("💬 Getting scheduler...")
     scheduler = DPMSolverMultistepScheduler.from_pretrained(
         args.model_id, subfolder="scheduler"
     )
+    my_print("💬 Getting pipeline...")
     pipe = InversableStableDiffusionPipeline.from_pretrained(
         args.model_id,
         scheduler=scheduler,
@@ -52,21 +67,25 @@ def main(args):
 
     # reference model
     if args.reference_model is not None:
+        my_print("💬 Getting ref_model & ref_clip_preprocess...")
         ref_model, _, ref_clip_preprocess = open_clip.create_model_and_transforms(
             args.reference_model,
             pretrained=args.reference_model_pretrain,
             device=device,
         )
+        my_print("💬 Getting ref_tokenizer...")
         ref_tokenizer = open_clip.get_tokenizer(args.reference_model)
 
     # dataset
+    my_print("💬 Getting dataset...")
     dataset, prompt_key = get_dataset(args)
 
     tester_prompt = ""  # assume at the detection time, the original prompt is unknown
+    my_print("💬 Getting text_embeddings...")
     text_embeddings = pipe.get_text_embedding(tester_prompt)
 
-    # ground-truth patch
     # 固定的水印底板
+    my_print("💬 Getting watermarking_pattern...")
     gt_patch = get_watermarking_pattern(pipe, args, device)
 
     results = []
@@ -75,15 +94,21 @@ def main(args):
     no_w_metrics = []
     w_metrics = []
 
+    my_print("💬 Iteration begin...")
+    start_time: float = time.time()
     for i in tqdm(range(args.start, args.end)):
+        # my_print("")
+
         seed = i + args.gen_seed  # `args.gen_seed` 默认为 0
+        set_random_seed(seed)
 
         current_prompt = dataset[i][prompt_key]
 
-        ### generation
-        # generation without watermarking
-        set_random_seed(seed)
+        # 获取初始高斯噪声
         init_latents_no_w = pipe.get_random_latents()  # `batch_size` 默认为 1
+
+        # 逆向去噪 + VAE 解码得到无水印图像的集合
+        # my_print("\n\n1\n\n")
         outputs_no_w = pipe(
             current_prompt,
             num_images_per_prompt=args.num_images,  # `num_images` 默认为 1
@@ -93,12 +118,15 @@ def main(args):
             width=args.image_length,
             latents=init_latents_no_w,
         )
+
         assert isinstance(outputs_no_w, ModifiedStableDiffusionPipelineOutput)
-        # 由于 `num_images` 默认为 1, 因此只输出一幅图像
+
+        # 由于 `num_images` 默认为 1, 因此集合中只有一幅图像
         orig_image_no_w = outputs_no_w.images[0]
 
         # generation with watermarking
         if init_latents_no_w is None:
+            raise RuntimeError("never reaches here")
             set_random_seed(seed)
             init_latents_w = pipe.get_random_latents()
         else:
@@ -107,11 +135,13 @@ def main(args):
         # get watermarking mask
         watermarking_mask = get_watermarking_mask(init_latents_w, args, device)
 
-        # inject watermark
+        # 将水印嵌入初始高斯噪声
         init_latents_w = inject_watermark(
             init_latents_w, watermarking_mask, gt_patch, args
         )
 
+        # 得到嵌入水印的图像的集合
+        # my_print("\n\n2\n\n")
         outputs_w = pipe(
             current_prompt,
             num_images_per_prompt=args.num_images,
@@ -121,18 +151,17 @@ def main(args):
             width=args.image_length,
             latents=init_latents_w,
         )
+
         assert isinstance(outputs_w, ModifiedStableDiffusionPipelineOutput)
+
         orig_image_w = outputs_w.images[0]
 
-        ### test watermark
-        # distortion
-        # 对生成的图像进行攻击
+        # 对无水印/带水印的生成图像进行攻击
         orig_image_no_w_auged, orig_image_w_auged = image_distortion(
             orig_image_no_w, orig_image_w, seed, args
         )
 
-        # reverse img without watermarking
-        # 使用 VAE 获取生成图像的潜在表示
+        # 使用 VAE 对攻击后的无水印生成图像进行编码得到其潜在表示
         img_no_w = (
             transform_img(orig_image_no_w_auged)
             .unsqueeze(0)
@@ -142,6 +171,7 @@ def main(args):
         image_latents_no_w = pipe.get_image_latents(img_no_w, sample=False)
 
         # 使用 DDIM inversion 求出初始噪声
+        # my_print("\n\n3\n\n")
         reversed_latents_no_w = pipe.forward_diffusion(
             latents=image_latents_no_w,
             text_embeddings=text_embeddings,
@@ -149,7 +179,7 @@ def main(args):
             num_inference_steps=args.test_num_inference_steps,
         )
 
-        # reverse img with watermarking
+        # 用同样的方法处理带水印的生成图像
         img_w = (
             transform_img(orig_image_w_auged)
             .unsqueeze(0)
@@ -158,14 +188,17 @@ def main(args):
         )
         image_latents_w = pipe.get_image_latents(img_w, sample=False)
 
+        # 用同样的方法处理带水印的生成图像
+        # my_print("\n\n4\n\n")
         reversed_latents_w = pipe.forward_diffusion(
             latents=image_latents_w,
             text_embeddings=text_embeddings,
             guidance_scale=1,
             num_inference_steps=args.test_num_inference_steps,
         )
+        # my_print("\n\n5\n\n")
 
-        # eval
+        # 计算水印区域的 L1 误差
         no_w_metric, w_metric = eval_watermark(
             reversed_latents_no_w, reversed_latents_w, watermarking_mask, gt_patch, args
         )
@@ -174,6 +207,7 @@ def main(args):
         w_sim = 0
 
         if args.reference_model is not None:
+            # sims 为一个仅含两个元素的一维向量, 两个元素分别为无水印图像和带水印图像与提示词之间的余弦相似度
             sims = measure_similarity(
                 [orig_image_no_w, orig_image_w],
                 current_prompt,
@@ -198,25 +232,28 @@ def main(args):
         no_w_metrics.append(-no_w_metric)
         w_metrics.append(-w_metric)
 
-        # if args.with_tracking:
-        #     if (args.reference_model is not None) and (i < args.max_num_log_image):
-        #         # log images when we use reference_model
-        #         table.add_data(
-        #             wandb.Image(orig_image_no_w),
-        #             w_no_sim,
-        #             wandb.Image(orig_image_w),
-        #             w_sim,
-        #             current_prompt,
-        #             no_w_metric,
-        #             w_metric,
-        #         )
-        #     else:
-        #         table.add_data(
-        #             None, w_no_sim, None, w_sim, current_prompt, no_w_metric, w_metric
-        #         )
+        if args.with_tracking:
+            # if (args.reference_model is not None) and (i < args.max_num_log_image):
+            #     # log images when we use reference_model
+            #     table.add_data(
+            #         wandb.Image(orig_image_no_w),
+            #         w_no_sim,
+            #         wandb.Image(orig_image_w),
+            #         w_sim,
+            #         current_prompt,
+            #         no_w_metric,
+            #         w_metric,
+            #     )
+            # else:
+            #     table.add_data(
+            #         None, w_no_sim, None, w_sim, current_prompt, no_w_metric, w_metric
+            #     )
 
-        #     clip_scores.append(w_no_sim)
-        #     clip_scores_w.append(w_sim)
+            clip_scores.append(w_no_sim)
+            clip_scores_w.append(w_sim)
+
+    end_time: float = time.time()
+    elapsed_time: float = end_time - start_time
 
     # roc
     preds = no_w_metrics + w_metrics
@@ -241,9 +278,11 @@ def main(args):
     #         }
     #     )
 
-    print(f"clip_score_mean: {mean(clip_scores)}")
-    print(f"w_clip_score_mean: {mean(clip_scores_w)}")
-    print(f"auc: {auc}, acc: {acc}, TPR@1%FPR: {low}")
+    my_print(f"clip_score_mean: {mean(clip_scores)}")
+    my_print(f"w_clip_score_mean: {mean(clip_scores_w)}")
+    my_print(f"auc: {auc}, acc: {acc}, TPR@1%FPR: {low}")
+    my_print("Speed: {:.2f} s/it".format(elapsed_time / (args.end - args.start)))
+    my_print(f"Mission {args.run_name} completed ✔️")
 
 
 if __name__ == "__main__":

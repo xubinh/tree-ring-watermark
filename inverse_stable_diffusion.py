@@ -138,9 +138,12 @@ class InversableStableDiffusionPipeline(ModifiedStableDiffusionPipeline):
             prompt_to_prompt = False
 
         for i, t in enumerate(
-            self.progress_bar(
-                reversed(timesteps_tensor) if reverse_process else timesteps_tensor
-            )
+            # self.progress_bar(
+            #     reversed(timesteps_tensor) if reverse_process else timesteps_tensor
+            # )
+            reversed(timesteps_tensor)
+            if reverse_process
+            else timesteps_tensor
         ):
             if prompt_to_prompt:
                 if i < use_old_emb_i:

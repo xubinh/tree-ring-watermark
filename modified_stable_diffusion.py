@@ -169,47 +169,47 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
 
         # 7. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order  # type: ignore
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                # add watermark
-                if watermarking_mask is not None:
-                    # latents[watermarking_mask] += watermarking_delta
-                    latents[watermarking_mask] += watermarking_delta * torch.sign(  # type: ignore
-                        latents[watermarking_mask]  # type: ignore
-                    )
-
-                # expand the latents if we are doing classifier free guidance
-                latent_model_input = (
-                    torch.cat([latents] * 2) if do_classifier_free_guidance else latents  # type: ignore
-                )
-                latent_model_input = self.scheduler.scale_model_input(  # type: ignore
-                    latent_model_input, t
+        # with self.progress_bar(total=num_inference_steps) as progress_bar:
+        for i, t in enumerate(timesteps):
+            # add watermark
+            if watermarking_mask is not None:
+                # latents[watermarking_mask] += watermarking_delta
+                latents[watermarking_mask] += watermarking_delta * torch.sign(  # type: ignore
+                    latents[watermarking_mask]  # type: ignore
                 )
 
-                # predict the noise residual
-                noise_pred = self.unet(  # type: ignore
-                    latent_model_input, t, encoder_hidden_states=text_embeddings
-                ).sample
+            # expand the latents if we are doing classifier free guidance
+            latent_model_input = (
+                torch.cat([latents] * 2) if do_classifier_free_guidance else latents  # type: ignore
+            )
+            latent_model_input = self.scheduler.scale_model_input(  # type: ignore
+                latent_model_input, t
+            )
 
-                # perform guidance
-                if do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = noise_pred_uncond + guidance_scale * (
-                        noise_pred_text - noise_pred_uncond
-                    )
+            # predict the noise residual
+            noise_pred = self.unet(  # type: ignore
+                latent_model_input, t, encoder_hidden_states=text_embeddings
+            ).sample
 
-                # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(  # type: ignore
-                    noise_pred, t, latents, **extra_step_kwargs
-                ).prev_sample
+            # perform guidance
+            if do_classifier_free_guidance:
+                noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                noise_pred = noise_pred_uncond + guidance_scale * (
+                    noise_pred_text - noise_pred_uncond
+                )
 
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or (
-                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0  # type: ignore
-                ):
-                    progress_bar.update()
-                    if callback is not None and i % callback_steps == 0:  # type: ignore
-                        callback(i, t, latents)  # type: ignore
+            # compute the previous noisy sample x_t -> x_t-1
+            latents = self.scheduler.step(  # type: ignore
+                noise_pred, t, latents, **extra_step_kwargs
+            ).prev_sample
+
+            # call the callback, if provided
+            if i == len(timesteps) - 1 or (
+                (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0  # type: ignore
+            ):
+                # progress_bar.update()
+                if callback is not None and i % callback_steps == 0:  # type: ignore
+                    callback(i, t, latents)  # type: ignore
 
         # 8. Post-processing
         image = self.decode_latents(latents)
