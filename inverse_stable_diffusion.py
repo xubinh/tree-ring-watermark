@@ -60,11 +60,12 @@ class InversableStableDiffusionPipeline(ModifiedStableDiffusionPipeline):
 
         self.forward_diffusion = partial(self.backward_diffusion, reverse_process=True)
 
-    def get_random_latents(self, latents=None, height=512, width=512, generator=None):
+    def get_random_latents(
+        self, batch_size=1, latents=None, height=512, width=512, generator=None
+    ):
         height = height or self.unet.config.sample_size * self.vae_scale_factor  # type: ignore
         width = width or self.unet.config.sample_size * self.vae_scale_factor  # type: ignore
 
-        batch_size = 1
         device = self._execution_device
 
         num_channels_latents = self.unet.in_channels  # type: ignore

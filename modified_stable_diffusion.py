@@ -5,8 +5,11 @@ import numpy as np
 import PIL
 import PIL.Image
 import torch
-from diffusers import StableDiffusionPipeline
-from diffusers.utils import BaseOutput, logging
+from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import (
+    StableDiffusionPipeline,
+)
+from diffusers.utils import logging
+from diffusers.utils.outputs import BaseOutput
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -52,7 +55,7 @@ class ModifiedStableDiffusionPipeline(StableDiffusionPipeline):
         num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
+        latents: Optional[torch.Tensor] = None,
         output_type: Optional[str] = "pil",
         return_dict: bool = True,
         callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,

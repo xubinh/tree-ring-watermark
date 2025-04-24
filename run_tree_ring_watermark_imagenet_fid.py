@@ -50,7 +50,7 @@ def main(args):
     os.makedirs(w_dir, exist_ok=True)
 
     # ground-truth patch
-    gt_patch = get_watermarking_pattern(None, args, device, shape=shape)
+    gt_patch = get_watermarked_fourier_latents(None, args, device, shape=shape)
 
     num_iters = (args.end - args.start) // args.bs
     counter = 0
@@ -91,7 +91,7 @@ def main(args):
             init_latents_w = copy.deepcopy(init_latents_no_w)
 
         # get watermarking mask
-        watermarking_mask = get_watermarking_mask(init_latents_w, args, device)
+        watermarking_mask = get_watermarking_masks(init_latents_w, args, device)
 
         # inject watermark
         init_latents_w = inject_watermark(

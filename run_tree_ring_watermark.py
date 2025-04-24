@@ -5,7 +5,9 @@ from statistics import mean, stdev
 
 import torch
 import wandb
-from diffusers import DPMSolverMultistepScheduler
+from diffusers.schedulers.scheduling_dpmsolver_multistep import (
+    DPMSolverMultistepScheduler,
+)
 from sklearn import metrics
 from tqdm import tqdm
 
@@ -86,7 +88,7 @@ def main(args):
 
     # 固定的水印底板
     my_print("💬 Getting watermarking_pattern...")
-    gt_patch = get_watermarking_pattern(pipe, args, device)
+    gt_patch = get_watermarked_fourier_latents(pipe, args, device)
 
     results = []
     clip_scores = []
@@ -133,7 +135,7 @@ def main(args):
             init_latents_w = copy.deepcopy(init_latents_no_w)
 
         # get watermarking mask
-        watermarking_mask = get_watermarking_mask(init_latents_w, args, device)
+        watermarking_mask = get_watermarking_masks(init_latents_w, args, device)
 
         # 将水印嵌入初始高斯噪声
         init_latents_w = inject_watermark(
@@ -157,13 +159,13 @@ def main(args):
         orig_image_w = outputs_w.images[0]
 
         # 对无水印/带水印的生成图像进行攻击
-        orig_image_no_w_auged, orig_image_w_auged = image_distortion(
+        orig_image_no_w_auged, orig_image_w_auged = distort_image(
             orig_image_no_w, orig_image_w, seed, args
         )
 
         # 使用 VAE 对攻击后的无水印生成图像进行编码得到其潜在表示
         img_no_w = (
-            transform_img(orig_image_no_w_auged)
+            transform_image(orig_image_no_w_auged)
             .unsqueeze(0)
             .to(text_embeddings.dtype)
             .to(device)
@@ -181,7 +183,7 @@ def main(args):
 
         # 用同样的方法处理带水印的生成图像
         img_w = (
-            transform_img(orig_image_w_auged)
+            transform_image(orig_image_w_auged)
             .unsqueeze(0)
             .to(text_embeddings.dtype)
             .to(device)
@@ -199,7 +201,7 @@ def main(args):
         # my_print("\n\n5\n\n")
 
         # 计算水印区域的 L1 误差
-        no_w_metric, w_metric = eval_watermark(
+        no_w_metric, w_metric = get_metrics(
             reversed_latents_no_w, reversed_latents_w, watermarking_mask, gt_patch, args
         )
 

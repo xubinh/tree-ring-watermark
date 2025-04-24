@@ -19,25 +19,29 @@ def read_json(filename: str) -> Mapping[str, Any]:
         return json.load(fp)
 
 
-def set_random_seed(seed=0):
-    torch.manual_seed(seed + 0)
-    torch.cuda.manual_seed(seed + 1)
-    torch.cuda.manual_seed_all(seed + 2)
-    np.random.seed(seed + 3)
-    torch.cuda.manual_seed_all(seed + 4)
-    random.seed(seed + 5)
+def set_random_seed(seed: int):
+    r"""手动设置大部分常用部件的 seed"""
+
+    random.seed(seed + 0)
+    np.random.seed(seed + 1)
+    torch.manual_seed(seed + 2)
+    torch.cuda.manual_seed_all(seed + 3)
 
 
-def transform_img(image, target_size=512):
-    tform = transforms.Compose(
+def transform_image(image: torch.FloatTensor, target_size=512) -> torch.FloatTensor:
+    transform = transforms.Compose(
         [
             transforms.Resize(target_size),
             transforms.CenterCrop(target_size),
             transforms.ToTensor(),
         ]
     )
-    image = tform(image)
-    return 2.0 * image - 1.0
+
+    image = transform(image)
+
+    image = 2.0 * image - 1.0  # type: ignore
+
+    return image
 
 
 def latents_to_imgs(pipe, latents):
@@ -47,7 +51,9 @@ def latents_to_imgs(pipe, latents):
     return x
 
 
-def image_distortion(img1, img2, seed, args):
+def distort_image(
+    img1, img2, seed, args
+) -> tuple[torch.FloatTensor, torch.FloatTensor]:
     """根据命令行参数中指定的攻击方法对图像进行处理. 如果没有指定任何攻击方法则不进行任何处理"""
 
     if args.r_degree is not None:
@@ -89,7 +95,7 @@ def image_distortion(img1, img2, seed, args):
         img1 = transforms.ColorJitter(brightness=args.brightness_factor)(img1)
         img2 = transforms.ColorJitter(brightness=args.brightness_factor)(img2)
 
-    return img1, img2
+    return img1, img2  # type: ignore
 
 
 # for one prompt to multiple images
@@ -112,67 +118,84 @@ def measure_similarity(images, prompt, model, clip_preprocess, tokenizer, device
 
 
 def get_dataset(args):
+    r"""获取训练集 `dataset`, 以及提示词的 Python 字典的键 `prompt_key`"""
+
     if "laion" in args.dataset:
         dataset_dict = load_dataset(args.dataset)
+
         assert isinstance(dataset_dict, DatasetDict)
+
         dataset = dataset_dict["train"]
         prompt_key = "TEXT"
+
     elif "coco" in args.dataset:
         # 这里需要手动下载, 见 README.md
         with open("fid_outputs/coco/meta_data.json") as f:
             dataset = json.load(f)
             dataset = dataset["annotations"]
             prompt_key = "caption"
+
     else:
         dataset_dict = load_dataset(args.dataset)
+
         assert isinstance(dataset_dict, DatasetDict)
+
         dataset = dataset_dict["test"]
         prompt_key = "Prompt"
 
     return dataset, prompt_key
 
 
-def circle_mask(size=64, r=10, x_offset=0, y_offset=0):
-    """返回一个边长为 `size` 的布尔方阵, 其中距离方阵中心点小于等于 r 的点置为 True, 作为水印掩码"""
+def get_circle_mask(size=64, r=10, x_offset=0, y_offset=0):
+    """返回一个边长为 `size` 的布尔方阵, 其中距离方阵中心点小于等于 r 的点置为 True, 作为水印掩码
 
-    # reference: https://stackoverflow.com/questions/69687798/generating-a-soft-circluar-mask-using-numpy-python-3
+    见 <https://stackoverflow.com/questions/69687798/generating-a-soft-circluar-mask-using-numpy-python-3>
+
+    """
+
+    # 方阵中心点
     x0 = y0 = size // 2
+
+    # 可选偏移
     x0 += x_offset
     y0 += y_offset
+
+    # 产生开放网格，适合于创建稀疏的坐标网格
     y, x = np.ogrid[:size, :size]
+
     y = y[::-1]
 
     return ((x - x0) ** 2 + (y - y0) ** 2) <= r**2
 
 
-def get_watermarking_mask(init_latents_w, args, device):
-    """生成一个形状和 `init_latents_w` 一致的布尔图像, 其中水印区域置 1, 其余部分置 0"""
+def get_watermarking_masks(shape_of_latents: torch.Size, args, device):
+    """生成一个水印掩码 Tensor 方阵, 其中水印区域置 1, 其余置 0"""
 
-    watermarking_mask = torch.zeros(init_latents_w.shape, dtype=torch.bool).to(device)
+    watermarking_masks = torch.zeros(shape_of_latents, dtype=torch.bool).to(device)
 
-    # `args.w_mask_shape` 默认为 "circle"
+    # 默认
     if args.w_mask_shape == "circle":
-        np_mask = circle_mask(init_latents_w.shape[-1], r=args.w_radius)
-        torch_mask = torch.tensor(np_mask).to(device)
+        circle_mask = get_circle_mask(shape_of_latents[-1], r=args.w_radius)
+        circle_mask = torch.tensor(circle_mask).to(device)
 
-        if args.w_channel == -1:
-            # all channels
-            watermarking_mask[:, :] = torch_mask
+        if args.w_channel >= 0:
+            watermarking_masks[:, args.w_channel] = circle_mask
+
         else:
-            watermarking_mask[:, args.w_channel] = torch_mask
+            watermarking_masks[:, :] = circle_mask
 
     elif args.w_mask_shape == "square":
-        anchor_p = init_latents_w.shape[-1] // 2
+        anchor_p = shape_of_latents[-1] // 2
         if args.w_channel == -1:
             # all channels
-            watermarking_mask[
+            watermarking_masks[
                 :,
                 :,
                 anchor_p - args.w_radius : anchor_p + args.w_radius,
                 anchor_p - args.w_radius : anchor_p + args.w_radius,
             ] = True
         else:
-            watermarking_mask[
+            watermarking_masks[
                 :,
                 args.w_channel,
                 anchor_p - args.w_radius : anchor_p + args.w_radius,
@@ -185,148 +208,182 @@ def get_watermarking_mask(init_latents_w, args, device):
     else:
         raise NotImplementedError(f"w_mask_shape: {args.w_mask_shape}")
 
-    return watermarking_mask
+    return watermarking_masks
 
 
-def get_watermarking_pattern(
-    pipe: Optional[InversableStableDiffusionPipeline], args, device, shape=None
+def get_watermarked_fourier_latents(
+    pipe: InversableStableDiffusionPipeline, batch_size, args, device
 ):
-    """随机生成一个固定的水印底板, 用于注入到真正的训练图像中"""
+    """生成一个随机的 (有可能是傅里叶空间中的) 树环水印 latent"""
 
     set_random_seed(args.w_seed)
 
-    if shape is not None:
-        gt_init = torch.randn(*shape, device=device)
-    else:
-        assert pipe
-        gt_init = pipe.get_random_latents()
+    initial_latents = pipe.get_random_latents(batch_size=batch_size)
 
-    if "seed_ring" in args.w_pattern:
-        gt_patch = gt_init
+    # 默认
+    if args.w_pattern == "ring":
+        watermarked_fourier_latents: torch.Tensor = torch.fft.fftshift(
+            torch.fft.fft2(initial_latents), dim=(-1, -2)
+        )
 
-        gt_patch_tmp = copy.deepcopy(gt_patch)
-
-        for i in range(args.w_radius, 0, -1):
-            tmp_mask = circle_mask(gt_init.shape[-1], r=i)
-            tmp_mask = torch.tensor(tmp_mask).to(device)
-
-            for j in range(gt_patch.shape[1]):
-                gt_patch[:, j, tmp_mask] = gt_patch_tmp[0, j, 0, i].item()
-
-    elif "ring" in args.w_pattern:
-        gt_patch = torch.fft.fftshift(torch.fft.fft2(gt_init), dim=(-1, -2))
-
-        gt_patch_tmp = copy.deepcopy(gt_patch)
+        copy_of_watermarked_fourier_latents = copy.deepcopy(watermarked_fourier_latents)
 
         for current_radius in range(args.w_radius, 0, -1):
-            tmp_mask = circle_mask(gt_init.shape[-1], r=current_radius)
-            tmp_mask = torch.tensor(tmp_mask).to(device)
+            circle_mask = get_circle_mask(initial_latents.shape[-1], r=current_radius)
+            circle_mask = torch.tensor(circle_mask).to(device)
 
-            number_of_channels: int = gt_patch.shape[1]
-
-            for current_channel in range(number_of_channels):
-                gt_patch[:, current_channel, tmp_mask] = gt_patch_tmp[
-                    0, current_channel, 0, current_radius
+            for current_channel_index in range(watermarked_fourier_latents.shape[1]):
+                chosen_value = copy_of_watermarked_fourier_latents[
+                    0, current_channel_index, 0, current_radius
                 ].item()
 
-    elif "seed_zeros" in args.w_pattern:
-        gt_patch = gt_init * 0
+                watermarked_fourier_latents[:, current_channel_index, circle_mask] = (
+                    chosen_value
+                )
+
+    elif "seed_ring" in args.w_pattern:
+        watermarked_fourier_latents = initial_latents
+
+        copy_of_watermarked_fourier_latents = copy.deepcopy(watermarked_fourier_latents)
+
+        for current_radius in range(args.w_radius, 0, -1):
+            circle_mask = get_circle_mask(initial_latents.shape[-1], r=current_radius)
+            circle_mask = torch.tensor(circle_mask).to(device)
+
+            for current_channel_index in range(watermarked_fourier_latents.shape[1]):
+                chosen_value = copy_of_watermarked_fourier_latents[
+                    0, current_channel_index, 0, current_radius
+                ].item()
+
+                watermarked_fourier_latents[:, current_channel_index, circle_mask] = (
+                    chosen_value
+                )
 
     elif "zeros" in args.w_pattern:
-        gt_patch = torch.fft.fftshift(torch.fft.fft2(gt_init), dim=(-1, -2)) * 0
+        watermarked_fourier_latents = (
+            torch.fft.fftshift(torch.fft.fft2(initial_latents), dim=(-1, -2)) * 0
+        )
 
-    elif "seed_rand" in args.w_pattern:
-        gt_patch = gt_init
+    elif "seed_zeros" in args.w_pattern:
+        watermarked_fourier_latents = initial_latents * 0
 
     elif "rand" in args.w_pattern:
-        gt_patch = torch.fft.fftshift(torch.fft.fft2(gt_init), dim=(-1, -2))
-        gt_patch[:] = gt_patch[0]
+        watermarked_fourier_latents = torch.fft.fftshift(
+            torch.fft.fft2(initial_latents), dim=(-1, -2)
+        )
+        watermarked_fourier_latents[:] = watermarked_fourier_latents[0]
+
+    elif "seed_rand" in args.w_pattern:
+        watermarked_fourier_latents = initial_latents
 
     elif "const" in args.w_pattern:
-        gt_patch = torch.fft.fftshift(torch.fft.fft2(gt_init), dim=(-1, -2)) * 0
-        gt_patch += args.w_pattern_const
+        watermarked_fourier_latents = (
+            torch.fft.fftshift(torch.fft.fft2(initial_latents), dim=(-1, -2)) * 0
+        )
+        watermarked_fourier_latents += args.w_pattern_const
 
-    return gt_patch
+    return watermarked_fourier_latents
 
 
-def inject_watermark(init_latents_w, watermarking_mask, gt_patch, args):
-    """将 `gt_patch` 中对应于 `watermarking_mask` 中置 1 的部分复制到 `init_latents_w` 中"""
+def inject_watermark(
+    initial_latents_to_be_watermarked,
+    watermarking_masks,
+    watermarked_fourier_latents,
+    args,
+):
+    r"""将 `watermarked_fourier_latents` 中对应于 `watermarking_mask` 中置 1 的部分复制到 `initial_latents_to_be_watermarked` 中"""
 
-    # 先转换至频域
-    init_latents_w_fft = torch.fft.fftshift(
-        torch.fft.fft2(init_latents_w), dim=(-1, -2)
+    fourier_initial_latents_to_be_watermarked = torch.fft.fftshift(
+        torch.fft.fft2(initial_latents_to_be_watermarked), dim=(-1, -2)
     )
 
-    # 添加水印
+    # 默认
     if args.w_injection == "complex":
-        init_latents_w_fft[watermarking_mask] = gt_patch[watermarking_mask].clone()
+        fourier_initial_latents_to_be_watermarked[watermarking_masks] = (
+            watermarked_fourier_latents[watermarking_masks].clone()
+        )
 
     elif args.w_injection == "seed":
-        init_latents_w[watermarking_mask] = gt_patch[watermarking_mask].clone()
-        return init_latents_w
+        initial_latents_to_be_watermarked[watermarking_masks] = (
+            watermarked_fourier_latents[watermarking_masks].clone()
+        )
+        return initial_latents_to_be_watermarked
 
     else:
         NotImplementedError(f"w_injection: {args.w_injection}")
 
     # 再转回时域
-    init_latents_w = torch.fft.ifft2(
-        torch.fft.ifftshift(init_latents_w_fft, dim=(-1, -2))
-    ).real
+    watermarked_initial_latents = torch.fft.ifft2(
+        torch.fft.ifftshift(fourier_initial_latents_to_be_watermarked, dim=(-1, -2))
+    ).real  # 注意到这里直接截断为了实部, 虚部被丢掉了
 
-    return init_latents_w
+    return watermarked_initial_latents
 
 
-def eval_watermark(
-    reversed_latents_no_w, reversed_latents_w, watermarking_mask, gt_patch, args
+def get_metrics(
+    reversed_attacked_clean_initial_latents,
+    reversed_attacked_watermarked_initial_latents,
+    watermarking_masks,
+    watermarked_fourier_latents,
+    args,
 ):
     """计算经过攻击与 DDIM inversion 之后的初始噪声中的水印部分与原始水印之间的距离 (默认使用 MAE, 即平均绝对误差 (Mean absolute error))"""
 
     # `w_measurement` 默认为 "l1_complex"
     if "complex" in args.w_measurement:
-        reversed_latents_no_w_fft = torch.fft.fftshift(
-            torch.fft.fft2(reversed_latents_no_w), dim=(-1, -2)
+        reversed_attacked_clean_fourier_initial_latents = torch.fft.fftshift(
+            torch.fft.fft2(reversed_attacked_clean_initial_latents), dim=(-1, -2)
         )
-        reversed_latents_w_fft = torch.fft.fftshift(
-            torch.fft.fft2(reversed_latents_w), dim=(-1, -2)
+        reversed_attacked_watermarked_fourier_initial_latents = torch.fft.fftshift(
+            torch.fft.fft2(reversed_attacked_watermarked_initial_latents), dim=(-1, -2)
         )
-        target_patch = gt_patch
 
     elif "seed" in args.w_measurement:
-        reversed_latents_no_w_fft = reversed_latents_no_w
-        reversed_latents_w_fft = reversed_latents_w
-        target_patch = gt_patch
+        reversed_attacked_clean_fourier_initial_latents = (
+            reversed_attacked_clean_initial_latents
+        )
+        reversed_attacked_watermarked_fourier_initial_latents = (
+            reversed_attacked_watermarked_initial_latents
+        )
 
     else:
         NotImplementedError(f"w_measurement: {args.w_measurement}")
 
     if "l1" in args.w_measurement:
-        no_w_metric = (
+        l1_norm_of_clean_images = (
             torch.abs(
-                reversed_latents_no_w_fft[watermarking_mask]
-                - target_patch[watermarking_mask]
+                reversed_attacked_clean_fourier_initial_latents[watermarking_masks]
+                - watermarked_fourier_latents[watermarking_masks]
             )
             .mean()
             .item()
         )
-        w_metric = (
+
+        l1_norm_of_watermarked_images = (
             torch.abs(
-                reversed_latents_w_fft[watermarking_mask]
-                - target_patch[watermarking_mask]
+                reversed_attacked_watermarked_fourier_initial_latents[
+                    watermarking_masks
+                ]
+                - watermarked_fourier_latents[watermarking_masks]
             )
             .mean()
             .item()
         )
+
+        metric_of_clean_images = l1_norm_of_clean_images
+        metric_of_watermarked_images = l1_norm_of_watermarked_images
+
     else:
         NotImplementedError(f"w_measurement: {args.w_measurement}")
 
-    return no_w_metric, w_metric
+    return metric_of_clean_images, metric_of_watermarked_images
 
 
 def get_p_value(
     reversed_latents_no_w, reversed_latents_w, watermarking_mask, gt_patch, args
 ):
     # assume it's Fourier space wm
-    reversed_latents_no_w_fft = torch.fft.fftshift(
+    reversed_attacked_clean_fourier_initial_latents = torch.fft.fftshift(
         torch.fft.fft2(reversed_latents_no_w), dim=(-1, -2)
     )[watermarking_mask].flatten()
     reversed_latents_w_fft = torch.fft.fftshift(
@@ -337,13 +394,24 @@ def get_p_value(
     target_patch = torch.concatenate([target_patch.real, target_patch.imag])
 
     # no_w
-    reversed_latents_no_w_fft = torch.concatenate(
-        [reversed_latents_no_w_fft.real, reversed_latents_no_w_fft.imag]
+    reversed_attacked_clean_fourier_initial_latents = torch.concatenate(
+        [
+            reversed_attacked_clean_fourier_initial_latents.real,
+            reversed_attacked_clean_fourier_initial_latents.imag,
+        ]
     )
-    sigma_no_w = reversed_latents_no_w_fft.std()
+    sigma_no_w = reversed_attacked_clean_fourier_initial_latents.std()
     lambda_no_w = (target_patch**2 / sigma_no_w**2).sum().item()
     x_no_w = (
-        (((reversed_latents_no_w_fft - target_patch) / sigma_no_w) ** 2).sum().item()
+        (
+            (
+                (reversed_attacked_clean_fourier_initial_latents - target_patch)
+                / sigma_no_w
+            )
+            ** 2
+        )
+        .sum()
+        .item()
     )
     p_no_w = scipy.stats.ncx2.cdf(x=x_no_w, df=len(target_patch), nc=lambda_no_w)
 

@@ -52,7 +52,7 @@ def main(args):
     os.makedirs(w_dir, exist_ok=True)
 
     # ground-truth patch
-    gt_patch = get_watermarking_pattern(pipe, args, device)
+    gt_patch = get_watermarked_fourier_latents(pipe, args, device)
 
     for i in tqdm(range(args.start, args.end)):
         seed = i + args.gen_seed
@@ -87,7 +87,7 @@ def main(args):
             init_latents_w = copy.deepcopy(init_latents_no_w)
 
         # get watermarking mask
-        watermarking_mask = get_watermarking_mask(init_latents_w, args, device)
+        watermarking_mask = get_watermarking_masks(init_latents_w, args, device)
 
         # inject watermark
         init_latents_w = inject_watermark(
